@@ -1,0 +1,17 @@
+# docker-compose.yml — aa-pruebas-auth
+# Uso: docker compose up -d  |  docker compose down  |  docker compose build
+
+services:
+  aa-pruebas-auth:
+    build: .
+    ports:
+      - "${PORT:-10101}:${PORT:-10101}"
+    env_file: .env
+    environment:
+      NODE_ENV: production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:10101/auth/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
