@@ -44,6 +44,10 @@ export class ExternalAuthDao {
     this.logger.log(`BASE_URL = ${this.baseUrl || '⚠️ VACÍO'}`);
     this.logger.log(`SSL_VERIFY = ${sslVerify}`);
     this.logger.log(`CRYPTO_KEY length = ${(this.config.get('CRYPTO_KEY') ?? process.env['CRYPTO_KEY'] ?? '').length}`);
+
+    if (!this.baseUrl) {
+      this.logger.error('EXTERNAL_AUTH_BASE_URL no está configurado — el servicio de autenticación no funcionará');
+    }
   }
 
   private get baseUrl(): string {
@@ -51,6 +55,9 @@ export class ExternalAuthDao {
   }
 
   async validateUser(username: string, password: string): Promise<UserInfo | null> {
+    if (!this.baseUrl) {
+      throw new ServiceUnavailableException('Servicio de autenticación no configurado (EXTERNAL_AUTH_BASE_URL vacío)');
+    }
     const endpoint = `${this.baseUrl}/autenticar`;
 
     for (let attempt = 0; attempt <= this.MAX_RETRIES; attempt++) {
@@ -66,8 +73,13 @@ export class ExternalAuthDao {
       } catch (err: any) {
         const isLast = attempt === this.MAX_RETRIES;
 
-        if (err?.response?.status === 401 || err?.response?.status === 403) {
+        if (err?.response?.status === 400 || err?.response?.status === 401 || err?.response?.status === 403) {
+          this.logger.warn(`MAC rejected credentials: HTTP ${err.response.status}`);
           throw new UnauthorizedException('Credenciales inválidas');
+        }
+        if (err?.response?.status === 404) {
+          this.logger.error(`MAC endpoint not found (404) — verificar EXTERNAL_AUTH_BASE_URL en .env`);
+          throw new ServiceUnavailableException('Servicio de autenticación mal configurado (ruta no encontrada)');
         }
         if (err instanceof TimeoutError || err?.code === 'ECONNABORTED') {
           this.logger.warn(`MAC timeout (attempt ${attempt + 1})`);
@@ -84,6 +96,10 @@ export class ExternalAuthDao {
           if (isLast) throw new ServiceUnavailableException('Error en servicio de autenticación');
           await this.delay(this.RETRY_DELAY);
           continue;
+        }
+        if (err?.message === 'Invalid URL' || err?.code === 'ERR_INVALID_URL') {
+          this.logger.error('MAC URL inválida — verificar EXTERNAL_AUTH_BASE_URL en .env');
+          throw new ServiceUnavailableException('Servicio de autenticación no configurado');
         }
         this.logger.error(`Unexpected MAC error: ${err?.message}`);
         if (isLast) throw new ServiceUnavailableException('Error inesperado en autenticación');
