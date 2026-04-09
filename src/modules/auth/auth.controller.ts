@@ -16,19 +16,21 @@ function extractToken(req: Request, authHeader: string | undefined): string {
 
 @Controller('auth')
 export class AuthController {
-  private readonly isProd: boolean;
+  private readonly cookieSecure: boolean;
 
   constructor(
     private readonly authService: AuthService,
     private readonly config: ConfigService,
   ) {
-    this.isProd = (config.get<string>('NODE_ENV') ?? process.env['NODE_ENV']) === 'production';
+    // COOKIE_SECURE=true solo cuando el frontend accede al AG via HTTPS
+    // Si el AG sirve solo HTTP, debe ser false aunque NODE_ENV=production
+    this.cookieSecure = (config.get<string>('COOKIE_SECURE') ?? process.env['COOKIE_SECURE']) === 'true';
   }
 
   private setCookies(res: Response, accessToken: string, refreshToken: string) {
     const cookieOpts = {
       httpOnly: true,
-      secure:   this.isProd,       // true en producción (HTTPS)
+      secure:   this.cookieSecure,
       sameSite: 'lax' as const,
       path:     '/',
     };

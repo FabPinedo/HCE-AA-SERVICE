@@ -5,7 +5,7 @@ services:
   aa-pruebas-auth:
     build: .
     ports:
-      - "${PORT:-10101}:${PORT:-10101}"
+      - "${PORT:-10402}:${PORT:-10402}"
     env_file: .env
     environment:
       NODE_ENV: production
@@ -13,7 +13,7 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:10402/auth/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${PORT:-10402}/auth/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
