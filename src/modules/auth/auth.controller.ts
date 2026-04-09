@@ -67,7 +67,7 @@ export class AuthController {
     });
     res.cookie(COOKIE_ACCESS, result.data.access_token, {
       httpOnly: true,
-      secure:   this.isProd,
+      secure:   this.cookieSecure,
       sameSite: 'lax',
       path:     '/',
       maxAge:   4 * 60 * 60 * 1000,
