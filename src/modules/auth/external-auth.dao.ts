@@ -1,7 +1,7 @@
 import {
   Injectable,
-  UnauthorizedException,
-  ForbiddenException,
+  HttpException,
+  HttpStatus,
   ServiceUnavailableException,
   GatewayTimeoutException,
   Logger,
@@ -24,8 +24,6 @@ import type { UserInfo, Sucursal } from './user-info.interface';
 export class ExternalAuthDao {
   private readonly logger      = new Logger(ExternalAuthDao.name);
   private readonly MAX_RETRIES = 1;
-  // Códigos MAC que indican usuario bloqueado/inactivo — ajustar según documentación de MAC
-  private readonly BLOCKED_CODES = new Set([2, 5]);
   private readonly RETRY_DELAY = 500;
   private get TIMEOUT_MS(): number {
     return Number(this.config.get<string>('EXTERNAL_AUTH_TIMEOUT_MS') ?? process.env['EXTERNAL_AUTH_TIMEOUT_MS'] ?? '5000');
@@ -55,6 +53,8 @@ export class ExternalAuthDao {
   }
 
   async validateUser(username: string, password: string): Promise<UserInfo | null> {
+    if (!username?.trim()) throw new HttpException({ codigo: 2, mensaje: 'El código de usuario es obligatorio' }, HttpStatus.BAD_REQUEST);
+    if (!password?.trim()) throw new HttpException({ codigo: 3, mensaje: 'La contraseña es obligatoria' }, HttpStatus.BAD_REQUEST);
     if (!this.baseUrl) {
       throw new ServiceUnavailableException('Servicio de autenticación no configurado (EXTERNAL_AUTH_BASE_URL vacío)');
     }
@@ -74,8 +74,9 @@ export class ExternalAuthDao {
         const isLast = attempt === this.MAX_RETRIES;
 
         if (err?.response?.status === 400 || err?.response?.status === 401 || err?.response?.status === 403) {
-          this.logger.warn(`MAC rejected credentials: HTTP ${err.response.status}`);
-          throw new UnauthorizedException('Credenciales inválidas');
+          // MAC retorna HTTP 400 con { codigo, mensaje, data } para todos los errores de negocio
+          // Delegamos a mapUser para que maneje cada código correctamente
+          return this.mapUser(err.response.data, username);
         }
         if (err?.response?.status === 404) {
           this.logger.error(`MAC endpoint not found (404) — verificar EXTERNAL_AUTH_BASE_URL en .env`);
@@ -160,34 +161,74 @@ export class ExternalAuthDao {
 
   /**
    * Mapea la respuesta de MAC a UserInfo.
-   * MAC responde (real): { codigo, mensaje, data: { token: { token }, usuario: { codigoUsuario, idPerfil, correo, ... } } }
-   * codigo = 0 → éxito, codigo = 8 → éxito pero requiere cambio de contraseña
+   * Endpoint simplificado: { codigo, mensaje, data: { token: "JWT", usuario: {...}, sucursales: [...] } }
+   *
+   * Códigos MAC:
+   *  0  → Éxito
+   *  1  → codigoSistema vacío (error de configuración del DAO)
+   *  2  → codigoUsuario vacío (error de configuración del DAO)
+   *  3  → contrasena vacío (error de configuración del DAO)
+   *  5  → Usuario no encontrado en AD
+   *  6  → Usuario y/o contraseña incorrecta
+   *  7  → Usuario bloqueado en AD
+   *  8  → Éxito, pero requiere cambiar contraseña
+   *  9  → Usuario deshabilitado en AD
+   *  99 → Error interno del servidor MAC
    */
   private mapUser(res: any, username: string): UserInfo | null {
     const codigo  = Number(res?.codigo ?? res?.Codigo ?? -1);
     const mensaje = res?.mensaje ?? res?.Mensaje ?? '';
 
-    if (this.BLOCKED_CODES.has(codigo)) {
+    // codigo=1: codigoSistema vacío — error de configuración (EXTERNAL_AUTH_SISTEMA en .env)
+    // codigo=2/3: usuario/contraseña vacíos — validados antes de llegar aquí
+    if (codigo === 1 || codigo === 2 || codigo === 3) {
+      this.logger.error(`MAC validation error: codigo=${codigo} mensaje=${mensaje} — verificar EXTERNAL_AUTH_SISTEMA en .env`);
+      throw new HttpException({ codigo, mensaje }, HttpStatus.BAD_REQUEST);
+    }
+
+    // Usuario no encontrado en AD
+    if (codigo === 5) {
+      this.logger.warn(`MAC user not found in AD: username=${username}`);
+      throw new HttpException({ codigo, mensaje }, HttpStatus.UNAUTHORIZED);
+    }
+
+    // Credenciales inválidas
+    if (codigo === 6) {
+      this.logger.warn(`MAC invalid credentials: username=${username}`);
+      throw new HttpException({ codigo, mensaje }, HttpStatus.UNAUTHORIZED);
+    }
+
+    // Usuario bloqueado en AD
+    if (codigo === 7) {
       this.logger.warn(`MAC blocked user: codigo=${codigo} mensaje=${mensaje} username=${username}`);
-      throw new ForbiddenException(`Usuario bloqueado: ${mensaje}`);
+      throw new HttpException({ codigo, mensaje }, HttpStatus.FORBIDDEN);
     }
 
+    // Usuario deshabilitado en AD
+    if (codigo === 9) {
+      this.logger.warn(`MAC disabled user: codigo=${codigo} mensaje=${mensaje} username=${username}`);
+      throw new HttpException({ codigo, mensaje }, HttpStatus.FORBIDDEN);
+    }
+
+    // Error interno del servidor MAC
+    if (codigo === 99) {
+      this.logger.error(`MAC internal server error: mensaje=${mensaje}`);
+      throw new HttpException({ codigo, mensaje }, HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    // Código inesperado no documentado
     if (codigo !== 0 && codigo !== 8) {
-      this.logger.warn(`MAC rejected login: codigo=${codigo} mensaje=${mensaje}`);
-      return null;
+      this.logger.warn(`MAC unexpected code: codigo=${codigo} mensaje=${mensaje}`);
+      throw new HttpException({ codigo, mensaje }, HttpStatus.UNAUTHORIZED);
     }
 
-    const token   = res?.data?.token?.token ?? '';
+    // Éxito (0) o éxito con cambio de contraseña requerido (8)
+    // El endpoint simplificado retorna data.token como string JWT directamente
+    const token   = res?.data?.token ?? '';
     const usuario = res?.data?.usuario ?? {};
     const perfil  = String(usuario?.idPerfil ?? '').trim();
 
-    // CP0014 — Usuario sin roles: MAC aceptó pero no asignó perfil
-    if (!perfil) {
-      this.logger.warn(`MAC login sin perfil asignado para usuario: ${username}`);
-      return null;
-    }
-
-    const roles: string[] = [perfil];
+    const roles: string[] = perfil ? [perfil] : [];
 
     const nombres         = usuario?.nombres         ?? '';
     const apellidoPaterno = usuario?.apellidoPaterno ?? '';
@@ -200,20 +241,21 @@ export class ExternalAuthDao {
     }));
 
     return {
-      userId:          usuario?.codigoUsuario ?? username,
-      username:        (usuario?.codigoUsuario ?? username).toUpperCase(),
+      userId:                 usuario?.codigoUsuario ?? username,
+      username:               (usuario?.codigoUsuario ?? username).toUpperCase(),
       roles,
-      email:           usuario?.correo ?? usuario?.email ?? '',
-      idUsuario:       String(usuario?.idUsuario ?? '').trim(),
+      email:                  usuario?.correo ?? usuario?.email ?? '',
+      idUsuario:              String(usuario?.idUsuario ?? '').trim(),
       nombres,
       apellidoPaterno,
       apellidoMaterno,
-      nombreCompleto:  `${nombres} ${apellidoPaterno} ${apellidoMaterno}`.trim(),
-      nombrePerfil:    usuario?.nombrePerfil ?? '',
-      numeroDocumento: usuario?.numeroDocumento ?? '',
+      nombreCompleto:         `${nombres} ${apellidoPaterno} ${apellidoMaterno}`.trim(),
+      nombrePerfil:           usuario?.nombrePerfil ?? '',
+      numeroDocumento:        usuario?.numeroDocumento ?? '',
       sucursales,
-      macToken:        token,
+      macToken:               token,
       perfil,
+      requirePasswordChange:  codigo === 8,
     };
   }
 

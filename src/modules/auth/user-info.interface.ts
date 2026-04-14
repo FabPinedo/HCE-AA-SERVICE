@@ -21,6 +21,7 @@ export interface UserInfo {
   numeroDocumento?: string;
   sucursales?:      Sucursal[];
   // Token externo — claim privado, nunca expuesto al frontend
-  macToken?:        string;
-  perfil?:          string;
+  macToken?:               string;
+  perfil?:                 string;
+  requirePasswordChange?:  boolean;
 }

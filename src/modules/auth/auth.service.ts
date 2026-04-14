@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ForbiddenException, HttpException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
@@ -34,6 +34,7 @@ export class AuthService {
         });
         throw new UnauthorizedException('Credenciales inválidas');
       }
+      const requirePasswordChange = user.requirePasswordChange ?? false;
 
       const sessionId = randomUUID();
       const payload   = {
@@ -75,17 +76,19 @@ export class AuthService {
 
       return {
         success: true,
-        message: 'Login successful',
+        message: requirePasswordChange ? 'Login exitoso, se requiere cambio de contraseña' : 'Login exitoso',
         data: {
-          user:          { userId: user.userId, username: user.username, roles: user.roles, email: user.email, sucursales: user.sucursales ?? [] },
-          access_token:  accessToken,
-          expires_in:    this.config.get<string>('JWT_EXPIRES_IN', '4h'),
-          token_type:    'Bearer',
-          refresh_token: refreshToken,
-          session_id:    sessionId,
+          user:                   { userId: user.userId, username: user.username, roles: user.roles, email: user.email, sucursales: user.sucursales ?? [] },
+          access_token:           accessToken,
+          expires_in:             this.config.get<string>('JWT_EXPIRES_IN', '4h'),
+          token_type:             'Bearer',
+          refresh_token:          refreshToken,
+          session_id:             sessionId,
+          requirePasswordChange,
         },
       };
     } catch (err) {
+      if (err instanceof HttpException) throw err;
       if (err instanceof UnauthorizedException) throw err;
       if (err instanceof ForbiddenException) {
         await this.kafkaLogger.log({
