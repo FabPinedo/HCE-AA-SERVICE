@@ -55,11 +55,7 @@ export class AuthService {
         ...(user.macToken ? { mac_token: user.macToken, mac_perfil: user.perfil } : {}),
       };
 
-      const accessToken  = this.jwt.sign(payload);
-      const refreshToken = this.jwt.sign(
-        { sub: user.userId, username: user.username, sessionId },
-        { secret: this.config.get<string>('JWT_REFRESH_SECRET'), expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRES_IN', '7d') } as any,
-      );
+      const accessToken = this.jwt.sign(payload);
 
       await this.kafkaLogger.log({
         event_type: 'LOGIN_SUCCESS',
@@ -78,12 +74,11 @@ export class AuthService {
         success: true,
         message: requirePasswordChange ? 'Login exitoso, se requiere cambio de contraseña' : 'Login exitoso',
         data: {
-          user:                   { userId: user.userId, username: user.username, roles: user.roles, email: user.email, sucursales: user.sucursales ?? [] },
-          access_token:           accessToken,
-          expires_in:             this.config.get<string>('JWT_EXPIRES_IN', '4h'),
-          token_type:             'Bearer',
-          refresh_token:          refreshToken,
-          session_id:             sessionId,
+          user:                 { userId: user.userId, username: user.username, roles: user.roles, email: user.email, sucursales: user.sucursales ?? [] },
+          access_token:         accessToken,
+          expires_in:           this.config.get<string>('JWT_EXPIRES_IN', '4h'),
+          token_type:           'Bearer',
+          session_id:           sessionId,
           requirePasswordChange,
         },
       };
@@ -119,33 +114,6 @@ export class AuthService {
     }
   }
 
-  async refresh(refreshToken: string, context?: { traceId?: string }) {
-    try {
-      const decoded   = this.jwt.verify(refreshToken, { secret: this.config.get<string>('JWT_REFRESH_SECRET') }) as any;
-      const sessionId = decoded.sessionId ?? randomUUID();
-      const payload   = { sub: decoded.sub, username: decoded.username, roles: decoded.roles ?? [], email: decoded.email ?? '', sessionId };
-      const accessToken = this.jwt.sign(payload);
-
-      await this.kafkaLogger.log({
-        event_type: 'TOKEN_REFRESH',
-        level:      'INFO',
-        trace_id:   context?.traceId,
-        user_id:    decoded.sub,
-        username:   decoded.username,
-        session_id: sessionId,
-        action:     'TOKEN_REFRESH',
-        outcome:    'SUCCESS',
-      });
-
-      return {
-        success: true, message: 'Token refreshed successfully',
-        data: { access_token: accessToken, expires_in: this.config.get<string>('JWT_EXPIRES_IN', '4h'), token_type: 'Bearer', session_id: sessionId },
-      };
-    } catch {
-      throw new UnauthorizedException('Refresh token inválido o expirado');
-    }
-  }
-
   async logout(token: string, context?: { traceId?: string }) {
     try {
       const d = this.jwt.verify(token) as any;
@@ -165,11 +133,18 @@ export class AuthService {
     }
   }
 
+  /** mac_token en el JWT puede ser string (nuevo) u objeto { token: string } (legacy) */
+  private resolveMacToken(raw: any): string {
+    return typeof raw === 'string' ? raw : (raw?.token ?? '');
+  }
+
   async getAccesos(token: string) {
     try {
       const d = this.jwt.verify(token) as any;
       if (!d.mac_token) throw new UnauthorizedException('Token de sesión sin credenciales externas');
-      const raw      = await this.dao.getAccesos(d.mac_token, d.mac_perfil ?? '');
+      const macToken = this.resolveMacToken(d.mac_token);
+      if (!macToken)   throw new UnauthorizedException('Token de sesión sin credenciales externas');
+      const raw      = await this.dao.getAccesos(macToken, d.mac_perfil ?? '');
       const opciones = raw?.data?.opciones ?? [];
       return {
         success: true,
@@ -215,7 +190,7 @@ export class AuthService {
     // Cerrar sesión en MAC — best-effort: no bloquea el logout si MAC falla
     if (d.mac_token) {
       try {
-        await this.dao.cerrarSesion(d.mac_token, d.username);
+        await this.dao.cerrarSesion(this.resolveMacToken(d.mac_token), d.username);
       } catch (macErr: any) {
         // Loguear advertencia pero continuar con el logout local
         await this.kafkaLogger.log({
@@ -250,7 +225,7 @@ export class AuthService {
     try {
       const d = this.jwt.verify(token) as any;
       if (!d.mac_token) throw new UnauthorizedException('Token de sesión sin credenciales externas');
-      const result = await this.dao.cambiarContrasena(d.mac_token, d.username, actualContrasena, nuevaContrasena);
+      const result = await this.dao.cambiarContrasena(this.resolveMacToken(d.mac_token), d.username, actualContrasena, nuevaContrasena);
       await this.kafkaLogger.log({
         event_type: 'PASSWORD_CHANGE',
         level:      'INFO',

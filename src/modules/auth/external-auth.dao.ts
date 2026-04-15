@@ -223,8 +223,9 @@ export class ExternalAuthDao {
     }
 
     // Éxito (0) o éxito con cambio de contraseña requerido (8)
-    // El endpoint simplificado retorna data.token como string JWT directamente
-    const token   = res?.data?.token ?? '';
+    // MAC puede devolver data.token como string directo o como objeto { token: "..." }
+    const tokenRaw = res?.data?.token;
+    const token    = typeof tokenRaw === 'string' ? tokenRaw : (tokenRaw?.token ?? '');
     const usuario = res?.data?.usuario ?? {};
     const perfil  = String(usuario?.idPerfil ?? '').trim();
 

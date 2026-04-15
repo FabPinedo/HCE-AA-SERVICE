@@ -3,8 +3,7 @@ import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 
-const COOKIE_ACCESS  = 'access_token';
-const COOKIE_REFRESH = 'refresh_token';
+const COOKIE_ACCESS = 'access_token';
 
 function extractToken(req: Request, authHeader: string | undefined): string {
   // Primero intenta cookie, luego Authorization header
@@ -27,20 +26,18 @@ export class AuthController {
     this.cookieSecure = (config.get<string>('COOKIE_SECURE') ?? process.env['COOKIE_SECURE']) === 'true';
   }
 
-  private setCookies(res: Response, accessToken: string, refreshToken: string) {
-    const cookieOpts = {
+  private setCookies(res: Response, accessToken: string) {
+    res.cookie(COOKIE_ACCESS, accessToken, {
       httpOnly: true,
       secure:   this.cookieSecure,
       sameSite: 'lax' as const,
       path:     '/',
-    };
-    res.cookie(COOKIE_ACCESS,  accessToken,  { ...cookieOpts, maxAge: 4  * 60 * 60 * 1000 }); // 4h
-    res.cookie(COOKIE_REFRESH, refreshToken, { ...cookieOpts, maxAge: 7  * 24 * 60 * 60 * 1000 }); // 7d
+      maxAge:   4 * 60 * 60 * 1000, // 4h — igual al tiempo de vida del mac_token
+    });
   }
 
   private clearCookies(res: Response) {
-    res.clearCookie(COOKIE_ACCESS,  { path: '/' });
-    res.clearCookie(COOKIE_REFRESH, { path: '/' });
+    res.clearCookie(COOKIE_ACCESS, { path: '/' });
   }
 
   @Post('login')
@@ -54,24 +51,7 @@ export class AuthController {
       userAgent: req.headers['user-agent'],
       traceId:   req.headers['x-trace-id'] as string,
     });
-    this.setCookies(res, result.data.access_token, result.data.refresh_token);
-    return result;
-  }
-
-  @Post('refresh')
-  async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const refreshToken = req.cookies?.[COOKIE_REFRESH] ?? req.body?.refresh_token;
-    if (!refreshToken) throw new UnauthorizedException('Refresh token requerido');
-    const result = await this.authService.refresh(refreshToken, {
-      traceId: req.headers['x-trace-id'] as string,
-    });
-    res.cookie(COOKIE_ACCESS, result.data.access_token, {
-      httpOnly: true,
-      secure:   this.cookieSecure,
-      sameSite: 'lax',
-      path:     '/',
-      maxAge:   4 * 60 * 60 * 1000,
-    });
+    this.setCookies(res, result.data.access_token);
     return result;
   }
 
