@@ -25,31 +25,33 @@ export class ExternalAuthDao {
   private readonly logger      = new Logger(ExternalAuthDao.name);
   private readonly MAX_RETRIES = 1;
   private readonly RETRY_DELAY = 500;
-  private get TIMEOUT_MS(): number {
-    return Number(this.config.get<string>('EXTERNAL_AUTH_TIMEOUT_MS') ?? process.env['EXTERNAL_AUTH_TIMEOUT_MS'] ?? '5000');
-  }
-  private readonly httpsAgent: https.Agent;
+  private readonly TIMEOUT_MS:  number;
+  private readonly httpsAgent:  https.Agent;
 
   constructor(
     private readonly http:   HttpService,
     private readonly config: ConfigService,
   ) {
+    this.TIMEOUT_MS = Number(this.config.get<string>('EXTERNAL_AUTH_TIMEOUT_MS', '5000'));
+
     // SSL_VERIFY=false acepta certificados autofirmados o de CA interna
     const sslVerify = this.config.get<string>('SSL_VERIFY', 'true') !== 'false';
     this.httpsAgent = new https.Agent({ rejectUnauthorized: sslVerify });
 
-    // Diagnóstico de arranque — confirma que las variables de entorno se leen correctamente
-    this.logger.log(`BASE_URL = ${this.baseUrl || '⚠️ VACÍO'}`);
-    this.logger.log(`SSL_VERIFY = ${sslVerify}`);
-    this.logger.log(`CRYPTO_KEY length = ${(this.config.get('CRYPTO_KEY') ?? process.env['CRYPTO_KEY'] ?? '').length}`);
+    // Diagnóstico de arranque — solo en entornos no productivos
+    if (this.config.get('NODE_ENV') !== 'production') {
+      this.logger.log(`BASE_URL = ${this.config.get<string>('EXTERNAL_AUTH_BASE_URL', '') || '⚠️ VACÍO'}`);
+      this.logger.log(`SSL_VERIFY = ${sslVerify}`);
+      this.logger.log(`CRYPTO_KEY length = ${this.config.get<string>('CRYPTO_KEY', '').length}`);
+    }
 
-    if (!this.baseUrl) {
+    if (!this.config.get<string>('EXTERNAL_AUTH_BASE_URL', '')) {
       this.logger.error('EXTERNAL_AUTH_BASE_URL no está configurado — el servicio de autenticación no funcionará');
     }
   }
 
   private get baseUrl(): string {
-    return this.config.get<string>('EXTERNAL_AUTH_BASE_URL') ?? process.env['EXTERNAL_AUTH_BASE_URL'] ?? '';
+    return this.config.get<string>('EXTERNAL_AUTH_BASE_URL', '');
   }
 
   async validateUser(username: string, password: string): Promise<UserInfo | null> {
@@ -267,8 +269,8 @@ export class ExternalAuthDao {
    */
   private macEncrypt(text: string): string {
     try {
-      const cryptoKey = this.config.get<string>('CRYPTO_KEY') ?? process.env['CRYPTO_KEY'] ?? '';
-      const cryptoIv  = this.config.get<string>('CRYPTO_IV')  ?? process.env['CRYPTO_IV']  ?? '';
+      const cryptoKey = this.config.get<string>('CRYPTO_KEY', '');
+      const cryptoIv  = this.config.get<string>('CRYPTO_IV',  '');
 
       if (!text)      throw new Error('password is empty or undefined');
       if (cryptoKey.length !== 32) throw new Error(`CRYPTO_KEY must be 32 chars, got ${cryptoKey.length}`);

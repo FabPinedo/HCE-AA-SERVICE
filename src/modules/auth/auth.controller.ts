@@ -1,49 +1,55 @@
-import { Controller, Post, Get, Body, Headers, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Get, Body, Req, Res, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiCookieAuth } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
+import { LoginDto, CambiarContrasenaDto } from './login.dto';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 const COOKIE_ACCESS = 'access_token';
 
-function extractToken(req: Request, authHeader: string | undefined): string {
-  // Primero intenta cookie, luego Authorization header
-  const fromCookie = req.cookies?.[COOKIE_ACCESS];
-  if (fromCookie) return fromCookie;
-  if (!authHeader?.startsWith('Bearer ')) throw new UnauthorizedException('Token requerido');
-  return authHeader.replace('Bearer ', '').trim();
-}
-
+@ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   private readonly cookieSecure: boolean;
+  private readonly cookieMaxAge: number;
 
   constructor(
     private readonly authService: AuthService,
-    private readonly config: ConfigService,
+    private readonly config:      ConfigService,
   ) {
-    // COOKIE_SECURE=true solo cuando el frontend accede al AG via HTTPS
-    // Si el AG sirve solo HTTP, debe ser false aunque NODE_ENV=production
-    this.cookieSecure = (config.get<string>('COOKIE_SECURE') ?? process.env['COOKIE_SECURE']) === 'true';
+    this.cookieSecure = config.get<string>('COOKIE_SECURE', 'false') === 'true';
+    this.cookieMaxAge = this.parseDuration(config.get<string>('JWT_EXPIRES_IN', '4h'));
   }
 
-  private setCookies(res: Response, accessToken: string) {
+  private parseDuration(raw: string): number {
+    const match = raw.match(/^(\d+)(s|m|h|d)$/);
+    if (!match) return 4 * 3_600_000;
+    const multipliers: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+    return Number(match[1]) * (multipliers[match[2]] ?? 3_600_000);
+  }
+
+  private setCookies(res: Response, accessToken: string): void {
     res.cookie(COOKIE_ACCESS, accessToken, {
       httpOnly: true,
       secure:   this.cookieSecure,
       sameSite: 'lax' as const,
       path:     '/',
-      maxAge:   4 * 60 * 60 * 1000, // 4h — igual al tiempo de vida del mac_token
+      maxAge:   this.cookieMaxAge,
     });
   }
 
-  private clearCookies(res: Response) {
+  private clearCookies(res: Response): void {
     res.clearCookie(COOKIE_ACCESS, { path: '/' });
   }
 
+  // ── Rutas públicas ─────────────────────────────────────────────
+
+  @ApiOperation({ summary: 'Login — retorna JWT en cookie httpOnly y en body' })
   @Post('login')
   async login(
-    @Body() body: { username: string; password: string },
-    @Req() req: Request,
+    @Body() body: LoginDto,
+    @Req()  req:  Request,
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.login(body.username, body.password, {
@@ -55,46 +61,66 @@ export class AuthController {
     return result;
   }
 
+  @ApiOperation({ summary: 'Valida un JWT — usado internamente por el API Gateway' })
   @Post('validate')
-  validate(@Req() req: Request, @Headers('authorization') authHeader: string) {
-    return this.authService.validateToken(extractToken(req, authHeader));
+  validate(@Req() req: Request) {
+    const cookieToken = (req.cookies as any)?.['access_token'] as string | undefined;
+    const authHeader  = req.headers['authorization'] as string | undefined;
+    const token = cookieToken ?? (authHeader?.replace('Bearer ', '').trim() ?? '');
+    return this.authService.validateToken(token);
   }
 
+  @ApiOperation({ summary: 'Health check' })
+  @Get('health')
+  health() {
+    return { status: 'OK', service: 'auth-pruebas-auth', timestamp: new Date().toISOString() };
+  }
+
+  // ── Rutas protegidas (requieren JWT válido) ────────────────────
+
+  @ApiOperation({ summary: 'Datos del usuario autenticado (desde JWT, sin DB lookup)' })
+  @ApiBearerAuth()
+  @ApiCookieAuth('access_token')
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  getMe(@Req() req: Request) {
+    return this.authService.getMe(req['user']);
+  }
+
+  @ApiOperation({ summary: 'Árbol de accesos del usuario en MAC' })
+  @ApiBearerAuth()
+  @ApiCookieAuth('access_token')
+  @UseGuards(JwtAuthGuard)
+  @Get('accesos')
+  getAccesos(@Req() req: Request) {
+    return this.authService.getAccesos(req['user']);
+  }
+
+  @ApiOperation({ summary: 'Cierra sesión en MAC y limpia la cookie' })
+  @ApiBearerAuth()
+  @ApiCookieAuth('access_token')
+  @UseGuards(JwtAuthGuard)
   @Post('logout')
   async logout(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-    @Headers('authorization') authHeader: string,
   ) {
-    const token = extractToken(req, authHeader);
-    const result = await this.authService.cerrarSesionMac(token, {
+    const result = await this.authService.cerrarSesionMac(req['user'], {
       traceId: req.headers['x-trace-id'] as string,
     });
     this.clearCookies(res);
     return result;
   }
 
-  @Get('me')
-  getMe(@Req() req: Request, @Headers('authorization') authHeader: string) {
-    return this.authService.getMe(extractToken(req, authHeader));
-  }
-
-  @Get('accesos')
-  getAccesos(@Req() req: Request, @Headers('authorization') authHeader: string) {
-    return this.authService.getAccesos(extractToken(req, authHeader));
-  }
-
+  @ApiOperation({ summary: 'Cambio de contraseña vía MAC' })
+  @ApiBearerAuth()
+  @ApiCookieAuth('access_token')
+  @UseGuards(JwtAuthGuard)
   @Post('cambiar-contrasena')
   cambiarContrasena(
-    @Req() req: Request,
-    @Headers('authorization') authHeader: string,
-    @Body() body: { actualContrasena: string; nuevaContrasena: string },
+    @Req()  req:  Request,
+    @Body() body: CambiarContrasenaDto,
   ) {
-    return this.authService.cambiarContrasena(extractToken(req, authHeader), body.actualContrasena, body.nuevaContrasena);
-  }
-
-  @Get('health')
-  health() {
-    return { status: 'OK', service: 'auth-pruebas-auth', timestamp: new Date().toISOString() };
+    return this.authService.cambiarContrasena(req['user'], body.actualContrasena, body.nuevaContrasena);
   }
 }

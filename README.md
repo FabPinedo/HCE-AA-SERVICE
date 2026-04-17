@@ -1,52 +1,98 @@
-# auth-pruebas-auth
+# aa-pruebas-auth
 
 > Auth Service generado por **Jarvis Platform** — 2/4/2026
 
-## JWT Payload (audit-ready)
+Microservicio de autenticación JWT con integración al sistema MAC (Módulo de Autenticación Centralizado).
+
+## Endpoints
+
+| Método | Ruta | Protección | Descripción |
+|--------|------|------------|-------------|
+| POST | `/auth/login` | Público | Login — retorna JWT en cookie httpOnly y en body |
+| POST | `/auth/validate` | Público | Valida un JWT — usado internamente por el API Gateway |
+| GET  | `/auth/health` | Público | Health check |
+| GET  | `/auth/me` | JWT (cookie) | Datos del usuario autenticado desde el JWT |
+| GET  | `/auth/accesos` | JWT (cookie) | Árbol de módulos y permisos del usuario en MAC |
+| POST | `/auth/logout` | JWT (cookie) | Cierra sesión en MAC y elimina la cookie |
+| POST | `/auth/cambiar-contrasena` | JWT (cookie) | Cambio de contraseña vía MAC |
+
+> Swagger disponible en `/api/docs` cuando `NODE_ENV != production`.
+
+## JWT Payload
 
 ```json
 {
-  "sub":       "uuid-del-usuario",
-  "username":  "juan.perez",
-  "roles":     ["admin", "user"],
-  "email":     "juan@empresa.com",
-  "sessionId": "uuid-de-sesion",
+  "sub":             "uuid-del-usuario",
+  "username":        "JPEREZ",
+  "roles":           ["12"],
+  "email":           "juan@empresa.com",
+  "sessionId":       "uuid-de-sesion",
+  "idUsuario":       "123",
+  "nombres":         "Juan",
+  "apellidoPaterno": "Pérez",
+  "apellidoMaterno": "García",
+  "nombreCompleto":  "Juan Pérez García",
+  "nombrePerfil":    "Médico Emergencia",
+  "numeroDocumento": "12345678",
+  "sucursales":      [{ "idSede": "1", "descripcion": "Sede Central" }],
   "iat": 1234567890,
   "exp": 1234571490
 }
 ```
 
-> **sub** y **username** son leídos por el API Gateway para registrar eventos de audit.
-> **sessionId** correlaciona con AUTH_SESSION en el logger.
+> **mac_token** nunca se incluye en el JWT — se almacena en caché server-side
+> (`MacTokenCacheService`) con TTL equivalente a `JWT_EXPIRES_IN`.
+> La clave de caché es `sessionId`.
 
-## Integración con servicio externo
+## Variables de entorno
 
-El servicio delega la autenticación a `EXTERNAL_AUTH_URL`.
-Adaptar el método `mapUser()` en `external-auth.dao.ts` según el contrato del servicio externo.
+| Variable | Requerida | Default | Descripción |
+|----------|:---------:|---------|-------------|
+| `PORT` | — | `10101` | Puerto HTTP |
+| `NODE_ENV` | — | `development` | Entorno (`development` / `production`) |
+| `COOKIE_SECURE` | — | `false` | `true` en producción (HTTPS obligatorio para la cookie) |
+| `JWT_SECRET` | ✓ | — | Secreto de firma JWT (mínimo 32 chars) |
+| `JWT_EXPIRES_IN` | — | `4h` | Duración del token (`4h`, `1d`, etc.) |
+| `EXTERNAL_AUTH_BASE_URL` | ✓ | — | URL base del servicio MAC sin barra final |
+| `EXTERNAL_AUTH_SISTEMA` | — | `25` | Código de sistema registrado en MAC |
+| `EXTERNAL_AUTH_TIMEOUT_MS` | — | `5000` | Timeout en ms para llamadas al MAC |
+| `SSL_VERIFY` | — | `true` | `false` acepta certificados autofirmados del MAC |
+| `CRYPTO_KEY` | ✓ | — | Clave AES-256-CBC — exactamente **32 caracteres** UTF-8 |
+| `CRYPTO_IV` | ✓ | — | IV AES-256-CBC — exactamente **16 caracteres** UTF-8 |
+| `KAFKA_BROKER` | — | `localhost:9092` | Broker(s) Kafka (coma-separados) |
+| `KAFKA_TOPIC` | — | `platform.logs` | Topic donde se publican eventos de auditoría |
 
-### Manejo de errores
+> `CRYPTO_KEY` y `CRYPTO_IV` deben coincidir exactamente con los valores
+> configurados en el sistema HCE .NET (`Criptography.Encrypt()`).
 
-| Escenario | Comportamiento |
-|-----------|----------------|
-| Credenciales inválidas | `401 Unauthorized` |
-| Timeout (>5s) | `504 Gateway Timeout` — 1 reintento automático |
-| Servicio caído | `503 Service Unavailable` — sin reintentos |
-| Error 5xx del externo | `503 Service Unavailable` — 1 reintento (500ms) |
+## Integración con MAC
 
-## Endpoints
+El servicio delega autenticación y accesos al sistema MAC:
 
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| POST | /auth/login | Login — retorna access_token + refresh_token |
-| POST | /auth/refresh | Renueva el access_token |
-| POST | /auth/validate | Valida token (usado por el API Gateway) |
-| POST | /auth/logout | Logout |
-| GET  | /auth/health | Health check |
+| Operación | Endpoint MAC |
+|-----------|-------------|
+| Autenticar usuario | `POST /autenticar` |
+| Obtener árbol de accesos | `POST /obtenerAccesos` |
+| Cerrar sesión | `POST /cerrarSesion` |
+| Cambiar contraseña | `POST /cambioContrasena` |
+
+### Manejo de errores MAC
+
+| Código MAC | Significado | HTTP devuelto |
+|-----------|-------------|---------------|
+| 0 | Éxito | 200 |
+| 5 | Usuario no encontrado en AD | 401 |
+| 6 | Usuario y/o contraseña incorrecta | 401 |
+| 7 | Usuario bloqueado en AD | 403 |
+| 8 | Éxito, requiere cambio de contraseña | 200 |
+| 9 | Usuario deshabilitado en AD | 403 |
+| 99 | Error interno MAC | 503 |
 
 ## Instalación
 
 ```bash
 npm install
 cp .env.example .env
+# Completar EXTERNAL_AUTH_BASE_URL, JWT_SECRET, CRYPTO_KEY, CRYPTO_IV
 npm run start:dev
 ```
