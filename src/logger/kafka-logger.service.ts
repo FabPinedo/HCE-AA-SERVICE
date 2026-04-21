@@ -29,7 +29,11 @@ export class KafkaLoggerService implements OnModuleInit, OnModuleDestroy {
       logLevel: logLevel.ERROR,
     });
     this.producer = kafka.producer();
-    await this.producer.connect();
+    try {
+      await this.producer.connect();
+    } catch {
+      // Kafka unavailable on startup — logs silently dropped until reconnect
+    }
   }
 
   async onModuleDestroy() {
