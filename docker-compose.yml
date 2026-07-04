@@ -28,3 +28,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+networks:
+  default:
+    name: hce-dev
+    external: true
