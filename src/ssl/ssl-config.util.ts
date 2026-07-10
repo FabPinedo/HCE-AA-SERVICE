@@ -1,12 +1,13 @@
-import * as fs      from 'fs';
-import * as path    from 'path';
-import * as crypto  from 'crypto';
-import * as tls     from 'tls';
-import * as https   from 'https';
+import * as fs   from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
+import * as tls    from 'tls';
+import * as https  from 'https';
 import { spawnSync } from 'child_process';
 
-// Prioridad 1: .pfx/.p12  (con password.txt opcional)
-// Prioridad 2: *.key + *.crt/*.cer  (con password.txt opcional)
+// ─── Detección de certificados SSL ────────────────────────────────────────────
+// Prioridad 1: .pfx / .p12  (con password.txt opcional)
+// Prioridad 2: *.key + *.crt / *.cer  (con password.txt opcional)
 // Si el PFX no puede descifrarse, hace fallback a .key/.crt en la misma carpeta
 
 function readPassphrase(certDir: string): string | undefined {
@@ -22,7 +23,7 @@ function readPassphrase(certDir: string): string | undefined {
 
 export function detectCertFormat(certDir: string) {
   try {
-    const files   = fs.readdirSync(certDir);
+    const files = fs.readdirSync(certDir);
     const pfxFile = files.find(f => /\.(pfx|p12)$/i.test(f));
     if (pfxFile) {
       return { type: 'pfx', pfx: path.join(certDir, pfxFile), passphrase: readPassphrase(certDir) };
@@ -77,20 +78,54 @@ function logPfxInfo(pfxPath: string, passphrase?: string): void {
   }
 }
 
+// ─── Agente HTTPS de salida para llamadas a otros MS con certificado autofirmado ──
+// Los MS internos comparten el mismo certificado de desarrollo (certs-dev/dev.crt).
+// En vez de deshabilitar la verificación TLS (rejectUnauthorized: false), se agrega
+// ese certificado a la lista de CAs de confianza: sigue validando la cadena, solo
+// que ahora reconoce este certificado autofirmado como válido.
+export function buildOutboundHttpsAgent(): https.Agent | undefined {
+  const certsPath = process.env.CERT_PATH || '/app/certs';
+  const certInfo = detectCertFormat(certsPath);
+  if (!certInfo || certInfo.type !== 'pem') return undefined;
+
+  try {
+    const devCert = fs.readFileSync(certInfo.cert!);
+    return new https.Agent({ ca: [...tls.rootCertificates.map(c => Buffer.from(c)), devCert] });
+  } catch {
+    return undefined;
+  }
+}
+
 export function buildHttpsOptions(): https.ServerOptions | null {
   if (process.env.USE_SSL !== 'true') return null;
 
-  const certsConfig = process.env.CERT_PATH || '/app/certs';
-  const paths = path.isAbsolute(certsConfig)
-    ? [certsConfig]
-    : [`/app/${certsConfig}`, path.join(__dirname, certsConfig), path.join(__dirname, `../${certsConfig}`)];
+  const certPathEnv = process.env.CERT_PATH?.trim();
+  if (!certPathEnv) {
+    console.warn('⚠️  USE_SSL=true pero CERT_PATH no está definido — continuando sin HTTPS');
+    console.warn('   Define CERT_PATH en .env apuntando al directorio de certificados');
+    return null;
+  }
+  // Rutas estilo Windows (C:\... o C:/...) son absolutas en Windows pero no en Linux
+  const isWindowsAbsPath = /^[A-Za-z]:[\\\/]/.test(certPathEnv);
+  if (isWindowsAbsPath && process.platform !== 'win32') {
+    console.warn(`⚠️  CERT_PATH es una ruta de Windows ("${certPathEnv}") pero el proceso corre en Linux/Docker`);
+    console.warn('   Define CERT_PATH con ruta Unix en docker-compose.dev.yml (ej: /app/certs)');
+    return null;
+  }
+  const resolvedPaths: string[] = (path.isAbsolute(certPathEnv) || isWindowsAbsPath)
+    ? [certPathEnv]
+    : [
+        path.join(process.cwd(), certPathEnv),
+        path.join(__dirname, '..', certPathEnv),
+        path.join(__dirname, certPathEnv),
+      ];
 
   console.log('🔍 Buscando certificados SSL...');
 
   let certInfo: ReturnType<typeof detectCertFormat> = null;
   let certsPath: string | null = null;
 
-  for (const p of paths) {
+  for (const p of resolvedPaths) {
     const detected = detectCertFormat(p);
     if (detected) { certInfo = detected; certsPath = p; console.log(`   ✔ ${p}  ← usada`); break; }
     console.log(`   ✘ ${p}  (${fs.existsSync(p) ? 'sin certificados' : 'no existe'})`);
