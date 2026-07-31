@@ -7,11 +7,16 @@ import type { UserInfo } from '../models/user-info.interface';
 export const AUTH_DAO = Symbol('AUTH_DAO');
 
 /**
- * MAC_DAO — token para IMacAuthDao (operaciones específicas del sistema MAC externo).
- * Solo ExternalAuthDao implementa esta interfaz.
- * Si se usa AuthDao local, este token se registra como NullMacAuthDao.
+ * MAC_DAO — token para IMacAuthDao (accesos, cierre de sesión, cambio de contraseña).
  *
- * Separación por ISP: AuthDao local NO está obligado a implementar operaciones MAC.
+ * Implementaciones registradas hoy, según AUTH_MODE (ver app.module.ts):
+ *   - AUTH_MODE=mac   → ScreenFieldDecoratingMacAuthDao, que envuelve a ExternalAuthDao
+ *                       (MAC sigue siendo la fuente del árbol) y le agrega `campos` (§9.7)
+ *   - AUTH_MODE=local → LocalSecurityAuthDao, respaldado por HCE_SECURITY vía
+ *                       ms-bs-core-security
+ *
+ * Separación por ISP: el stub AuthDao (auth.dao.ts, autenticación contra variables de
+ * entorno) implementa solo IAuthDao y no está obligado a proveer estas operaciones.
  */
 export const MAC_DAO = Symbol('MAC_DAO');
 

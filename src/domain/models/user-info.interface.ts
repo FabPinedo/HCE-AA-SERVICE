@@ -24,4 +24,10 @@ export interface UserInfo {
   macToken?:               string;
   perfil?:                 string;
   requirePasswordChange?:  boolean;
+  // §9.6 — marca/tema del tenant. Autoritativo: sale de security.tenant_branding
+  // (una fila por base HCE_SECURITY), NUNCA de una preferencia del cliente. Viaja
+  // firmado como claim del JWT y se expone en GET auth/me.
+  // ExternalAuthDao no lo puebla: MAC no tiene noción de marca, así que en un tenant
+  // con MAC queda undefined y el frontend cae al tema por defecto.
+  themeCode?:              string;
 }
