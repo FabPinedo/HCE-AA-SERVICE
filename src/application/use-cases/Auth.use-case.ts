@@ -54,10 +54,6 @@ export class AuthUseCase {
         nombrePerfil:    user.nombrePerfil    ?? '',
         numeroDocumento: user.numeroDocumento ?? '',
         sucursales:      user.sucursales      ?? [],
-        // §9.6 — claim FIRMADA junto al resto del token: el cliente puede leerla
-        // pero no alterarla sin invalidar la firma. Esto es lo que impide que un
-        // usuario simule la marca de otra empresa manipulando el frontend.
-        themeCode:       user.themeCode       ?? '',
       };
 
       const accessToken  = this.jwt.sign(payload);
@@ -128,10 +124,6 @@ export class AuthUseCase {
         numeroDocumento: user.numeroDocumento,
         sucursales:      user.sucursales ?? [],
         sessionId:       user.sessionId,
-        // §9.6 paso 4 — se lee de las claims del JWT ya verificado por JwtAuthGuard,
-        // mismo patrón que nombrePerfil/numeroDocumento. mf-shell debe tomar el tema
-        // ÚNICAMENTE de aquí (o del JWT decodificado), nunca de un valor editable.
-        themeCode:       user.themeCode,
       },
     };
   }
