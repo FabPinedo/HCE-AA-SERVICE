@@ -20,6 +20,20 @@ import { MacTokenExpiredException } from '../../domain/exceptions/mac-token-expi
  * Algoritmo de encriptación: AES-256-CBC / PKCS7 / Base64
  * Equivalente al Criptography.Encrypt() del sistema HCE (.NET)
  * Keys configuradas en .env: CRYPTO_KEY (32 bytes) y CRYPTO_IV (16 bytes)
+ *
+ * `EXTERNAL_AUTH_ENCRYPT_PASSWORD` (default `true`): controla si
+ * `macEncrypt()` cifra de verdad o devuelve el texto plano tal cual. Es
+ * config PURA por deployment/tenant (mismo espíritu que
+ * `EXTERNAL_AUTH_BASE_URL`/`AUTH_MODE`), cero detección de backend en
+ * runtime. Existe porque MAC V2 (el backend NestJS alternativo, ver
+ * `MAC/V2/BACK/ms-cnl/ms-cnl-mac-auth`) autentica con bcrypt del lado
+ * servidor -- no tiene sentido cifrar AES-256-CBC solo para que el otro
+ * lado lo desencripte y recién ahí lo hashee. Para un tenant apuntando a
+ * MAC V2, `EXTERNAL_AUTH_ENCRYPT_PASSWORD=false` manda la contraseña en
+ * claro (protegida solo por TLS, igual que cualquier login JSON
+ * estándar). Para el tenant con el MAC .NET original (Clínica San
+ * Felipe), se deja en `true` (o sin definir) y el comportamiento es
+ * IDÉNTICO al de siempre.
  */
 @Injectable()
 export class ExternalAuthDao {
@@ -43,6 +57,7 @@ export class ExternalAuthDao {
     if (this.config.get('NODE_ENV') !== 'production') {
       this.logger.log(`BASE_URL = ${this.config.get<string>('EXTERNAL_AUTH_BASE_URL', '') || '⚠️ VACÍO'}`);
       this.logger.log(`SSL_VERIFY = ${sslVerify}`);
+      this.logger.log(`EXTERNAL_AUTH_ENCRYPT_PASSWORD = ${this.config.get<string>('EXTERNAL_AUTH_ENCRYPT_PASSWORD', 'true')}`);
       this.logger.log(`CRYPTO_KEY length = ${this.config.get<string>('CRYPTO_KEY', '').length}`);
     }
 
@@ -310,16 +325,28 @@ export class ExternalAuthDao {
   }
 
   /**
-   * AES-256-CBC + PKCS7 + Base64
-   * Equivalente exacto de Criptography.Encrypt() (.NET)
-   * CRYPTO_KEY: 32 bytes UTF-8 | CRYPTO_IV: 16 bytes UTF-8
+   * AES-256-CBC + PKCS7 + Base64 -- Equivalente exacto de
+   * Criptography.Encrypt() (.NET). CRYPTO_KEY: 32 bytes UTF-8 |
+   * CRYPTO_IV: 16 bytes UTF-8.
+   *
+   * Condicional por `EXTERNAL_AUTH_ENCRYPT_PASSWORD` (default `true`,
+   * ver comentario de clase): si es `false`, devuelve `text` tal cual
+   * -- SIN tocar `CRYPTO_KEY`/`CRYPTO_IV` (ni siquiera se leen en ese
+   * caso). El chequeo de "no vacío" se mantiene para AMBOS caminos: un
+   * password vacío es un error de todas formas, cifrado o no.
    */
   private macEncrypt(text: string): string {
     try {
+      if (!text) throw new Error('password is empty or undefined');
+
+      const shouldEncrypt = this.config.get<string>('EXTERNAL_AUTH_ENCRYPT_PASSWORD', 'true') !== 'false';
+      if (!shouldEncrypt) {
+        return text;
+      }
+
       const cryptoKey = this.config.get<string>('CRYPTO_KEY', '');
       const cryptoIv  = this.config.get<string>('CRYPTO_IV',  '');
 
-      if (!text)      throw new Error('password is empty or undefined');
       if (cryptoKey.length !== 32) throw new Error(`CRYPTO_KEY must be 32 chars, got ${cryptoKey.length}`);
       if (cryptoIv.length  !== 16) throw new Error(`CRYPTO_IV must be 16 chars, got ${cryptoIv.length}`);
 

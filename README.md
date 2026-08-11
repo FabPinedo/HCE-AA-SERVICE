@@ -84,8 +84,9 @@ la verificación con el secret equivocado falla antes incluso de mirar el campo 
 | `EXTERNAL_AUTH_SISTEMA` | — | `25` | Código de sistema registrado en MAC |
 | `EXTERNAL_AUTH_TIMEOUT_MS` | — | `5000` | Timeout en ms para llamadas al MAC |
 | `SSL_VERIFY` | — | `true` | `false` acepta certificados autofirmados del MAC |
-| `CRYPTO_KEY` | ✓ | — | Clave AES-256-CBC — exactamente **32 caracteres** UTF-8 |
-| `CRYPTO_IV` | ✓ | — | IV AES-256-CBC — exactamente **16 caracteres** UTF-8 |
+| `EXTERNAL_AUTH_ENCRYPT_PASSWORD` | — | `true` | `false` manda `contrasena`/`actualContrasena`/`nuevaContrasena` en texto plano (solo TLS) en vez de AES-256-CBC. Usar `false` únicamente cuando `EXTERNAL_AUTH_BASE_URL` apunta a MAC V2 (NestJS, hashea con bcrypt del lado servidor) — con el MAC .NET original se deja en `true`. Config pura por tenant, sin detección de backend en runtime. |
+| `CRYPTO_KEY` | ✓ salvo `EXTERNAL_AUTH_ENCRYPT_PASSWORD=false` | — | Clave AES-256-CBC — exactamente **32 caracteres** UTF-8 |
+| `CRYPTO_IV` | ✓ salvo `EXTERNAL_AUTH_ENCRYPT_PASSWORD=false` | — | IV AES-256-CBC — exactamente **16 caracteres** UTF-8 |
 | `KAFKA_BROKER` | — | `localhost:9092` | Broker(s) Kafka (coma-separados) |
 | `KAFKA_TOPIC` | — | `platform.logs` | Topic donde se publican eventos de auditoría |
 
