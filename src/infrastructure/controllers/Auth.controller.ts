@@ -39,7 +39,7 @@ export class AuthController {
     res.cookie(COOKIE_ACCESS, accessToken, {
       httpOnly: true,
       secure:   this.cookieSecure,
-      sameSite: 'lax' as const,
+      sameSite: this.cookieSecure ? 'none' : 'lax',
       path:     '/',
       maxAge:   this.cookieMaxAge,
     });
@@ -47,7 +47,7 @@ export class AuthController {
       res.cookie(COOKIE_REFRESH, refreshToken, {
         httpOnly: true,
         secure:   this.cookieSecure,
-        sameSite: 'lax' as const,
+        sameSite: this.cookieSecure ? 'none' : 'lax',
         path:     '/',
         maxAge:   this.refreshCookieMaxAge,
       });
