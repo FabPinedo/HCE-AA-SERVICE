@@ -90,7 +90,15 @@ export function buildOutboundHttpsAgent(): https.Agent | undefined {
 
   try {
     const devCert = fs.readFileSync(certInfo.cert!);
-    return new https.Agent({ ca: [...tls.rootCertificates.map(c => Buffer.from(c)), devCert] });
+    // checkServerIdentity deshabilitado: el cert autofirmado solo tiene SANs
+    // localhost/host.docker.internal/127.0.0.1, y en Kubernetes las llamadas
+    // salientes van al nombre del Service (ej. apigw-bs-hce) — sin esto la
+    // verificación de hostname falla con "Hostname/IP does not match
+    // certificate's altnames" (confirmado en QA). La CA se sigue validando.
+    return new https.Agent({
+      ca: [...tls.rootCertificates.map(c => Buffer.from(c)), devCert],
+      checkServerIdentity: () => undefined,
+    });
   } catch {
     return undefined;
   }
